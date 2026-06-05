@@ -34,7 +34,7 @@ func NewPaymentHandler(ps *store.PaymentStore, cs *store.CartStore, ts *store.To
 
 type CreateIntentInput struct {
 	CartID   string `json:"cart_id" binding:"required"`
-	Currency string `json:"currency" binding:"required,oneof=INT USD EUR"`
+	Currency string `json:"currency" binding:"required,oneof=INR USD EUR"`
 }
 
 func (h *PaymentHandler) CreateIntent(c *gin.Context) {
@@ -60,11 +60,17 @@ func (h *PaymentHandler) CreateIntent(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to initialize payment flow"})
 		return
 	}
-
+	var erro error
+	intent, erro = h.PaymentStore.Get(intent.ID)
+	if erro != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal error"})
+		return
+	}
 	c.JSON(http.StatusCreated, intent)
-	intent, _ = h.PaymentStore.Get(intent.ID)
+
 	evt := h.Dispatcher.EventStore.RecordEvent("payment_intent.created", intent)
 	h.Dispatcher.Dispatch(evt)
+
 }
 
 func (h *PaymentHandler) GetIntent(c *gin.Context) {
@@ -93,28 +99,32 @@ func (h *PaymentHandler) ConfirmIntent(c *gin.Context) {
 		return
 	}
 
+	// Spend-limit check: ensure the token has enough budget for this charge.
 	_, exists := c.Get("Token")
 	if exists {
 		secret := c.MustGet("TokenSecret").(string)
 		if err := h.TokenStore.RecordSpend(secret, intent.AmountPaise); err != nil {
-			c.JSON(http.StatusForbidden, gin.H{"error": "spend check failed" + err.Error()})
+			c.JSON(http.StatusForbidden, gin.H{"error": "spend check failed: " + err.Error()})
 			return
 		}
 	}
-	intentFailed, _ := h.PaymentStore.Get(id)
-	evtConfirmed := h.Dispatcher.EventStore.RecordEvent("payment_intent.confirmed", intentFailed)
-	h.Dispatcher.Dispatch(evtConfirmed)
 
+	// Step 1: Charge the gateway FIRST.
+	// We must know whether the charge succeeded before emitting any events.
 	err = h.Gateway.Charge(intent.AmountPaise, intent.Currency)
 	if err != nil {
-		_ = h.PaymentStore.TransitionStatus(id, models.PaymentStatusFailed) // Ignore DB error, user cares about the gateway failure
+		// Gateway failed — transition to "failed" and emit the failure event.
+		_ = h.PaymentStore.TransitionStatus(id, models.PaymentStatusFailed)
 		c.JSON(http.StatusPaymentRequired, gin.H{"error": "payment gateway charge failed: " + err.Error()})
-		intentFailed, _ := h.PaymentStore.Get(id)
-		evtFailed := h.Dispatcher.EventStore.RecordEvent("payment_intent.failed", intentFailed)
-		h.Dispatcher.Dispatch(evtFailed)
+
+		if intentFailed, fetchErr := h.PaymentStore.Get(id); fetchErr == nil {
+			evt := h.Dispatcher.EventStore.RecordEvent("payment_intent.failed", intentFailed)
+			h.Dispatcher.Dispatch(evt)
+		}
 		return
 	}
 
+	// Step 2: Charge succeeded — transition status.
 	err = h.PaymentStore.TransitionStatus(id, models.PaymentStatusSucceeded)
 	if err != nil {
 		var transitionErr store.ErrInvalidTransition
@@ -129,10 +139,16 @@ func (h *PaymentHandler) ConfirmIntent(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	intent, _ = h.PaymentStore.Get(id)
-	c.JSON(http.StatusOK, intent)
-	intentSucceeded, _ := h.PaymentStore.Get(id)
-	evtSucceeded := h.Dispatcher.EventStore.RecordEvent("payment_intent.succeeded", intentSucceeded)
-	h.Dispatcher.Dispatch(evtSucceeded)
 
+	// Step 3: Fetch updated status and respond with final state.
+	intent, err = h.PaymentStore.Get(id)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal error"})
+		return
+	}
+	c.JSON(http.StatusOK, intent)
+
+	// Step 4: Emit the success event AFTER responding.
+	evt := h.Dispatcher.EventStore.RecordEvent("payment_intent.succeeded", intent)
+	h.Dispatcher.Dispatch(evt)
 }

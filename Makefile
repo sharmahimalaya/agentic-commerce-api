@@ -16,6 +16,6 @@ build:
 
 clean: 
 	rm -f agentic-commerce coverage.out coverage.html
-	
+
 lint:
-	golangci-lint run ./..
+	golangci-lint run ./...
