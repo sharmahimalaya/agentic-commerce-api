@@ -43,8 +43,8 @@ type AddItemInput struct {
 }
 
 func (h *CartHandler) AddItem(c *gin.Context) {
-	cartId := c.Param("id")
-	cart, err := h.CartStore.Get(cartId)
+	cartID := c.Param("id")
+	cart, err := h.CartStore.Get(cartID)
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "cart not found"})
 		return
@@ -65,13 +65,7 @@ func (h *CartHandler) AddItem(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "insufficient stock available"})
 		return
 	}
-	foundIndex := -1
-	for idx, item := range cart.Items {
-		if item.ProductID == input.ProductID {
-			foundIndex = idx
-			break
-		}
-	}
+	foundIndex := cart.FindItemIndex(input.ProductID)
 	if foundIndex >= 0 {
 		cart.Items[foundIndex].Quantity += input.Quantity
 	} else {
@@ -109,13 +103,7 @@ func (h *CartHandler) UpdateItem(c *gin.Context) {
 		return
 	}
 
-	foundIndex := -1
-	for idx, item := range cart.Items {
-		if item.ProductID == productID {
-			foundIndex = idx
-			break
-		}
-	}
+	foundIndex := cart.FindItemIndex(productID)
 
 	if foundIndex == -1 {
 		c.JSON(http.StatusNotFound, gin.H{"error": "item not found in cart"})
@@ -147,13 +135,8 @@ func (h *CartHandler) RemoveItem(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "cart not found"})
 		return
 	}
-	foundIndex := -1
-	for idx, item := range cart.Items {
-		if item.ProductID == productID {
-			foundIndex = idx
-			break
-		}
-	}
+	foundIndex := cart.FindItemIndex(productID)
+
 	if foundIndex == -1 {
 		c.JSON(http.StatusNotFound, gin.H{"error": "item not found in cart"})
 		return
