@@ -5,6 +5,8 @@ import (
 	"errors"
 )
 
+var ErrProductNotFound = errors.New("product not found")
+
 type ProductStore struct {
 	products []models.Product
 }
@@ -31,5 +33,5 @@ func (s *ProductStore) GetById(id string) (models.Product, error) {
 			return p, nil
 		}
 	}
-	return models.Product{}, errors.New("product not found")
+	return models.Product{}, ErrProductNotFound
 }

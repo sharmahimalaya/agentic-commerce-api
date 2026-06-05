@@ -1,6 +1,7 @@
 package main
 
 import (
+	"agentic-commerce/gateway"
 	"agentic-commerce/handlers"
 	"agentic-commerce/middleware"
 	"agentic-commerce/models"
@@ -17,13 +18,6 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-type MockGateway struct{}
-
-func (g *MockGateway) Charge(amount int64, currency string) error {
-	log.Printf("[MOCK GATEWAY] Charging %d %s", amount, currency)
-	return nil
-}
-
 func main() {
 	productStore := store.NewProductStore()
 	cartStore := store.NewCartStore()
@@ -35,7 +29,7 @@ func main() {
 	dispatcher := webhook.NewDispatcher(eventStore)
 	dispatcher.Start()
 
-	mockGateway := &MockGateway{}
+	mockGateway := &gateway.MockGateway{}
 
 	productHandler := handlers.NewProductHandler(productStore)
 	cartHandler := handlers.NewCartHandler(cartStore, productStore, dispatcher)

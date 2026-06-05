@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"agentic-commerce/store"
+	"errors"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
@@ -25,7 +26,10 @@ func (h *ProductHandler) GetProduct(c *gin.Context) {
 
 	product, err := h.Store.GetById(id)
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+		if errors.Is(err, store.ErrProductNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 	c.JSON(http.StatusOK, product)

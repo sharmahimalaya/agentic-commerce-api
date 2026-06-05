@@ -10,6 +10,8 @@ import (
 	"github.com/google/uuid"
 )
 
+var ErrCartNotFound = errors.New("cart not found")
+
 type CartStore struct {
 	mu    sync.RWMutex
 	carts map[string]*models.Cart
@@ -42,7 +44,7 @@ func (s *CartStore) Get(id string) (*models.Cart, error) {
 
 	cart, exists := s.carts[id]
 	if !exists {
-		return nil, errors.New("cart not found")
+		return nil, ErrCartNotFound
 	}
 
 	return cart, nil

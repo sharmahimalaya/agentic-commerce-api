@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"agentic-commerce/gateway"
 	"agentic-commerce/models"
 	"agentic-commerce/store"
 	"agentic-commerce/webhook"
@@ -10,19 +11,15 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-type PaymentGateway interface {
-	Charge(amount int64, currency string) error
-}
-
 type PaymentHandler struct {
 	PaymentStore *store.PaymentStore
 	CartStore    *store.CartStore
 	TokenStore   *store.TokenStore
-	Gateway      PaymentGateway
+	Gateway      gateway.Gateway
 	Dispatcher   *webhook.Dispatcher
 }
 
-func NewPaymentHandler(ps *store.PaymentStore, cs *store.CartStore, ts *store.TokenStore, pg PaymentGateway, d *webhook.Dispatcher) *PaymentHandler {
+func NewPaymentHandler(ps *store.PaymentStore, cs *store.CartStore, ts *store.TokenStore, pg gateway.Gateway, d *webhook.Dispatcher) *PaymentHandler {
 	return &PaymentHandler{
 		PaymentStore: ps,
 		CartStore:    cs,

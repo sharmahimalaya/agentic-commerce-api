@@ -4,6 +4,7 @@ import (
 	"agentic-commerce/models"
 	"agentic-commerce/store"
 	"agentic-commerce/webhook"
+	"errors"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
@@ -28,10 +29,14 @@ func (h *CartHandler) CreateCart(c *gin.Context) {
 }
 
 func (h *CartHandler) GetCart(c *gin.Context) {
-	id := c.Param("id")
-	cart, err := h.CartStore.Get(id)
+	cartID := c.Param("id")
+	cart, err := h.CartStore.Get(cartID)
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+		if errors.Is(err, store.ErrCartNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 	c.JSON(http.StatusOK, cart)
@@ -92,7 +97,11 @@ func (h *CartHandler) UpdateItem(c *gin.Context) {
 
 	cart, err := h.CartStore.Get(cartID)
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "cart not found"})
+		if errors.Is(err, store.ErrCartNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 
@@ -132,7 +141,11 @@ func (h *CartHandler) RemoveItem(c *gin.Context) {
 
 	cart, err := h.CartStore.Get(cartID)
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "cart not found"})
+		if errors.Is(err, store.ErrCartNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 	foundIndex := cart.FindItemIndex(productID)
