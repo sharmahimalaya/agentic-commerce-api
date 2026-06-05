@@ -1,0 +1,18 @@
+run:
+  timeout: 2m
+
+linters:
+  enable:
+    - errcheck      # Catches unchecked errors (e.g. ignoring return values)
+    - govet         # Reports suspicious constructs (printf formatting, shadow variables)
+    - staticcheck   # Advanced static analysis for bugs and performance optimizations
+    - unused        # Finds unused constants, variables, functions, and types
+    - misspell      # Catches typos in comments and strings (e.g., "ddown")
+    - gosimple      # Suggests simpler code construction alternatives
+
+linters-settings:
+  misspell:
+    locale: US
+
+issues:
+  exclude-use-default: false
