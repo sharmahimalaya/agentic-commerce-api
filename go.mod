@@ -1,4 +1,4 @@
-module agentic-commerce
+module acommerce_api_endpoint
 
 go 1.25.0
 

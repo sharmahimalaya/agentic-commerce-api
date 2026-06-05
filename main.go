@@ -1,12 +1,12 @@
 package main
 
 import (
-	"agentic-commerce/gateway"
-	"agentic-commerce/handlers"
-	"agentic-commerce/middleware"
-	"agentic-commerce/models"
-	"agentic-commerce/store"
-	"agentic-commerce/webhook"
+	"acommerce_api_endpoint/gateway"
+	"acommerce_api_endpoint/handlers"
+	"acommerce_api_endpoint/middleware"
+	"acommerce_api_endpoint/models"
+	"acommerce_api_endpoint/store"
+	"acommerce_api_endpoint/webhook"
 	"context"
 	"log"
 	"net/http"

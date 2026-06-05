@@ -1,8 +1,8 @@
 package webhook
 
 import (
-	"agentic-commerce/models"
-	"agentic-commerce/store"
+	"acommerce_api_endpoint/models"
+	"acommerce_api_endpoint/store"
 	"bytes"
 	"context"
 	"crypto/hmac"

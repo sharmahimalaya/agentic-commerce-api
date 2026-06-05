@@ -1,7 +1,7 @@
 package handlers
 
 import (
-	"agentic-commerce/store"
+	"acommerce_api_endpoint/store"
 	"net/http"
 
 	"github.com/gin-gonic/gin"

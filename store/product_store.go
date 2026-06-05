@@ -1,7 +1,7 @@
 package store
 
 import (
-	"agentic-commerce/models"
+	"acommerce_api_endpoint/models"
 	"errors"
 )
 

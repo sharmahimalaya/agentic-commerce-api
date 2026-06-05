@@ -1,10 +1,10 @@
 package handlers
 
 import (
-	"agentic-commerce/gateway"
-	"agentic-commerce/models"
-	"agentic-commerce/store"
-	"agentic-commerce/webhook"
+	"acommerce_api_endpoint/gateway"
+	"acommerce_api_endpoint/models"
+	"acommerce_api_endpoint/store"
+	"acommerce_api_endpoint/webhook"
 	"errors"
 	"net/http"
 

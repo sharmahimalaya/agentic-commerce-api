@@ -4,7 +4,7 @@
 *.dll
 *.so
 *.dylib
-agentic-commerce
+acommerce_api_endpoint
 
 # Test binary
 *.test
