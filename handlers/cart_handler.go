@@ -21,7 +21,10 @@ func NewCartHandler(cs *store.CartStore, ps *store.ProductStore, d *webhook.Disp
 
 func (h *CartHandler) CreateCart(c *gin.Context) {
 	cart := h.CartStore.Create()
-	c.JSON(http.StatusOK, cart)
+
+	evt := h.Dispatcher.EventStore.RecordEvent("cart.created", cart)
+	h.Dispatcher.Dispatch(evt)
+	c.JSON(http.StatusCreated, cart)
 }
 
 func (h *CartHandler) GetCart(c *gin.Context) {
@@ -120,7 +123,11 @@ func (h *CartHandler) UpdateItem(c *gin.Context) {
 	}
 
 	product, err := h.ProductStore.GetById(productID)
-	if err == nil && product.Stock < input.Quantity {
+	if err != nil {
+		c.JSON(http.StatusUnprocessableEntity, gin.H{"error": "product no longer exists"})
+		return
+	}
+	if product.Stock < input.Quantity {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "insufficient stock available"})
 		return
 	}

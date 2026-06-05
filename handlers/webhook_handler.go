@@ -34,7 +34,7 @@ func (h *WebhookHandler) CreateSubscription(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, sub)
+	c.JSON(http.StatusCreated, sub)
 }
 
 func (h *WebhookHandler) ListSubscriptions(c *gin.Context) {
@@ -48,5 +48,5 @@ func (h *WebhookHandler) DeleteSubscription(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
 		return
 	}
-	c.Status(http.StatusOK)
+	c.Status(http.StatusNoContent)
 }
