@@ -34,7 +34,7 @@ func NewPaymentHandler(ps *store.PaymentStore, cs *store.CartStore, ts *store.To
 
 type CreateIntentInput struct {
 	CartID   string `json:"cart_id" binding:"required"`
-	Currency string `json:"currency" bindging:"required"`
+	Currency string `json:"currency" binding:"required,oneof=INT USD EUR"`
 }
 
 func (h *PaymentHandler) CreateIntent(c *gin.Context) {
@@ -57,7 +57,7 @@ func (h *PaymentHandler) CreateIntent(c *gin.Context) {
 	intent := h.PaymentStore.Create(cart.ID, cart.TotalPaise, input.Currency)
 
 	if err := h.PaymentStore.TransitionStatus(intent.ID, models.PaymentStatusRequiresConfirmation); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to intialize payment flow"})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to initialize payment flow"})
 		return
 	}
 

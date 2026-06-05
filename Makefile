@@ -12,10 +12,10 @@ coverage:
 	@echo "Coverage report generated: coverage.html"
 
 build:
-	go build -o agent-commerce .
+	go build -o agentic-commerce .
 
 clean: 
-	rm-f agentic-commerce coverage.out coverage.html
-
+	rm -f agentic-commerce coverage.out coverage.html
+	
 lint:
-	golangci-lint run ./...
+	golangci-lint run ./..
