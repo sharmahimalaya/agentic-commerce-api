@@ -93,7 +93,7 @@ type UpdateItemInput struct {
 
 func (h *CartHandler) UpdateItem(c *gin.Context) {
 	cartID := c.Param("id")
-	productID := c.Param("itemId")
+	productID := c.Param("productId")
 
 	cart, err := h.CartStore.Get(cartID)
 	if err != nil {
@@ -137,7 +137,7 @@ func (h *CartHandler) UpdateItem(c *gin.Context) {
 
 func (h *CartHandler) RemoveItem(c *gin.Context) {
 	cartID := c.Param("id")
-	productID := c.Param("itemId")
+	productID := c.Param("productId")
 
 	cart, err := h.CartStore.Get(cartID)
 	if err != nil {

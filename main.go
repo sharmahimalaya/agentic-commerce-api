@@ -1,6 +1,7 @@
 package main
 
 import (
+	"acommerce_api_endpoint/config"
 	"acommerce_api_endpoint/gateway"
 	"acommerce_api_endpoint/handlers"
 	"acommerce_api_endpoint/middleware"
@@ -13,12 +14,13 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
-	"time"
 
 	"github.com/gin-gonic/gin"
 )
 
 func main() {
+
+	cfg := config.Load()
 	productStore := store.NewProductStore()
 	cartStore := store.NewCartStore()
 	paymentStore := store.NewPaymentStore()
@@ -28,6 +30,10 @@ func main() {
 
 	dispatcher := webhook.NewDispatcher(eventStore)
 	dispatcher.Start()
+
+	cleanupCtx, cancelCleanup := context.WithCancel(context.Background())
+	defer cancelCleanup()
+	idempotencyStore.StartCleanup(cfg.IdempotencyTTL, cleanupCtx)
 
 	mockGateway := &gateway.MockGateway{}
 
@@ -40,33 +46,36 @@ func main() {
 	r := gin.Default()
 	r.Use(middleware.RequestID())
 	r.Use(middleware.Idempotency(idempotencyStore))
+	v1 := r.Group("/v1")
+	{
+		adminAuth := middleware.RequireAdminKey(cfg.AdminAPIKey)
+		v1.POST("/tokens", adminAuth, tokenHandler.CreateToken)
 
-	r.POST("/tokens", tokenHandler.CreateToken)
+		v1.GET("/products", middleware.RequireScope(models.ScopeProductsRead, tokenStore), productHandler.ListProducts)
+		v1.GET("/products/:id", middleware.RequireScope(models.ScopeProductsRead, tokenStore), productHandler.GetProduct)
 
-	r.GET("/products", middleware.RequireScope(models.ScopeProductsRead, tokenStore), productHandler.ListProducts)
-	r.GET("/products/:id", middleware.RequireScope(models.ScopeProductsRead, tokenStore), productHandler.GetProduct)
+		v1.POST("/carts", middleware.RequireScope(models.ScopeCartsWrite, tokenStore), cartHandler.CreateCart)
+		v1.GET("/carts/:id", middleware.RequireScope(models.ScopeCartsRead, tokenStore), cartHandler.GetCart)
+		v1.POST("/carts/:id/items", middleware.RequireScope(models.ScopeCartsWrite, tokenStore), cartHandler.AddItem)
+		v1.PUT("/carts/:id/items/:productId", middleware.RequireScope(models.ScopeCartsWrite, tokenStore), cartHandler.UpdateItem)
+		v1.DELETE("/carts/:id/items/:productId", middleware.RequireScope(models.ScopeCartsWrite, tokenStore), cartHandler.RemoveItem)
 
-	r.POST("/carts", middleware.RequireScope(models.ScopeCartsWrite, tokenStore), cartHandler.CreateCart)
-	r.GET("/carts/:id", middleware.RequireScope(models.ScopeCartsRead, tokenStore), cartHandler.GetCart)
-	r.POST("/carts/:id/items", middleware.RequireScope(models.ScopeCartsWrite, tokenStore), cartHandler.AddItem)
-	r.PUT("/carts/:id/items/:itemId", middleware.RequireScope(models.ScopeCartsWrite, tokenStore), cartHandler.UpdateItem)
-	r.DELETE("/carts/:id/items/:itemId", middleware.RequireScope(models.ScopeCartsWrite, tokenStore), cartHandler.RemoveItem)
+		v1.POST("/payment-intents", middleware.RequireScope(models.ScopePaymentsWrite, tokenStore), paymentHandler.CreateIntent)
+		v1.GET("/payment-intents/:id", middleware.RequireScope(models.ScopePaymentsRead, tokenStore), paymentHandler.GetIntent)
+		v1.POST("/payment-intents/:id/confirm", middleware.RequireScope(models.ScopePaymentsWrite, tokenStore), paymentHandler.ConfirmIntent)
 
-	r.POST("/payment-intents", middleware.RequireScope(models.ScopePaymentsWrite, tokenStore), paymentHandler.CreateIntent)
-	r.GET("/payment-intents/:id", middleware.RequireScope(models.ScopePaymentsRead, tokenStore), paymentHandler.GetIntent)
-	r.POST("/payment-intents/:id/confirm", middleware.RequireScope(models.ScopePaymentsWrite, tokenStore), paymentHandler.ConfirmIntent)
-
-	r.POST("/webhooks", middleware.RequireScope(models.ScopeCartsWrite, tokenStore), webhookHandler.CreateSubscription)
-	r.GET("/webhooks", middleware.RequireScope(models.ScopeCartsRead, tokenStore), webhookHandler.ListSubscriptions)
-	r.DELETE("/webhooks/:id", middleware.RequireScope(models.ScopeCartsWrite, tokenStore), webhookHandler.DeleteSubscription)
+		v1.POST("/webhooks", middleware.RequireScope(models.ScopeCartsWrite, tokenStore), webhookHandler.CreateSubscription)
+		v1.GET("/webhooks", middleware.RequireScope(models.ScopeCartsRead, tokenStore), webhookHandler.ListSubscriptions)
+		v1.DELETE("/webhooks/:id", middleware.RequireScope(models.ScopeCartsWrite, tokenStore), webhookHandler.DeleteSubscription)
+	}
 
 	srv := &http.Server{
-		Addr:    ":8080",
+		Addr:    ":" + cfg.Port,
 		Handler: r,
 	}
 
 	go func() {
-		log.Println("Starting API on port 8080...")
+		log.Println("Starting API on port " + cfg.Port + "...")
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatalf("Failed to start server: %v", err)
 		}
@@ -76,7 +85,7 @@ func main() {
 	<-quit
 	log.Println("Shutting down server...")
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), cfg.ShutdownTimeout)
 	defer cancel()
 
 	if err := srv.Shutdown(ctx); err != nil {

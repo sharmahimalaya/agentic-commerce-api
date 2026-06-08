@@ -3,6 +3,7 @@ package handlers
 import (
 	"acommerce_api_endpoint/store"
 	"net/http"
+	"time"
 
 	"github.com/gin-gonic/gin"
 )
@@ -22,6 +23,13 @@ type CreateSubscriptionInput struct {
 	Events []string `json:"events" binding:"required,min=1"`
 }
 
+type WebhookSubscriptionResponse struct {
+	ID        string   `json:"id"`
+	URL       string   `json:"url"`
+	Events    []string `json:"events"`
+	CreatedAt time.Time
+}
+
 func (h *WebhookHandler) CreateSubscription(c *gin.Context) {
 	var input CreateSubscriptionInput
 	if err := c.ShouldBindJSON(&input); err != nil {
@@ -39,7 +47,17 @@ func (h *WebhookHandler) CreateSubscription(c *gin.Context) {
 
 func (h *WebhookHandler) ListSubscriptions(c *gin.Context) {
 	subs := h.EventStore.ListSubscriptions()
-	c.JSON(http.StatusOK, subs)
+
+	resp := make([]WebhookSubscriptionResponse, len(subs))
+	for i, s := range subs {
+		resp[i] = WebhookSubscriptionResponse{
+			ID:        s.ID,
+			URL:       s.URL,
+			Events:    s.Events,
+			CreatedAt: s.CreatedAt,
+		}
+	}
+	c.JSON(http.StatusOK, resp)
 }
 
 func (h *WebhookHandler) DeleteSubscription(c *gin.Context) {

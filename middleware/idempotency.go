@@ -2,16 +2,19 @@ package middleware
 
 import (
 	"bytes"
+	"context"
 	"net/http"
 	"sync"
+	"time"
 
 	"github.com/gin-gonic/gin"
 )
 
 type SavedResponse struct {
-	Status int
-	Body   []byte
-	Header http.Header
+	Status    int
+	Body      []byte
+	Header    http.Header
+	CreatedAt time.Time
 }
 
 type IdempotencyStore struct {
@@ -33,6 +36,28 @@ type responseWriterWrapper struct {
 func (w *responseWriterWrapper) Write(b []byte) (int, error) {
 	w.body.Write(b)
 	return w.ResponseWriter.Write(b)
+}
+
+func (s *IdempotencyStore) StartCleanup(ttl time.Duration, ctx context.Context) {
+	go func() {
+		ticker := time.NewTicker((ttl / 2))
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				s.mu.Lock()
+				now := time.Now()
+				for key, entry := range s.cache {
+					if now.Sub(entry.CreatedAt) > ttl {
+						delete(s.cache, key)
+					}
+				}
+				s.mu.Unlock()
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
 }
 
 func Idempotency(store *IdempotencyStore) gin.HandlerFunc {

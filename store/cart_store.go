@@ -47,7 +47,12 @@ func (s *CartStore) Get(id string) (*models.Cart, error) {
 		return nil, ErrCartNotFound
 	}
 
-	return cart, nil
+	copiedCart := *cart
+	copiedItems := make([]models.CartItem, len(cart.Items))
+	copy(copiedItems, cart.Items)
+	copiedCart.Items = copiedItems
+
+	return &copiedCart, nil
 }
 
 func (s *CartStore) Save(cart *models.Cart) {
@@ -60,5 +65,10 @@ func (s *CartStore) Save(cart *models.Cart) {
 		total += item.PricePaise * int64(item.Quantity)
 	}
 	cart.TotalPaise = total
-	s.carts[cart.ID] = cart
+
+	copiedCart := *cart
+	copiedItems := make([]models.CartItem, len(cart.Items))
+	copy(copiedItems, cart.Items)
+	copiedCart.Items = copiedItems
+	s.carts[cart.ID] = &copiedCart
 }

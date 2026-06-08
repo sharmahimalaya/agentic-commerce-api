@@ -97,20 +97,20 @@ func (h *PaymentHandler) ConfirmIntent(c *gin.Context) {
 	}
 
 	// Spend-limit check: ensure the token has enough budget for this charge.
-	_, exists := c.Get("Token")
+	tokenVal, exists := c.Get("Token")
 	if exists {
-		secret := c.MustGet("TokenSecret").(string)
-		if err := h.TokenStore.RecordSpend(secret, intent.AmountPaise); err != nil {
+		token := tokenVal.(*models.AuthToken)
+		if err := h.TokenStore.RecordSpend(token.Secret, intent.AmountPaise); err != nil {
 			c.JSON(http.StatusForbidden, gin.H{"error": "spend check failed: " + err.Error()})
 			return
 		}
 	}
 
-	// Step 1: Charge the gateway FIRST.
-	// We must know whether the charge succeeded before emitting any events.
+	// Step 1: Charge the gateway FIRST
+	// We must know whether the charge succeeded before emitting any events
 	err = h.Gateway.Charge(intent.AmountPaise, intent.Currency)
 	if err != nil {
-		// Gateway failed — transition to "failed" and emit the failure event.
+		// Gateway failed — transition to "failed" and emit the failure event
 		_ = h.PaymentStore.TransitionStatus(id, models.PaymentStatusFailed)
 		c.JSON(http.StatusPaymentRequired, gin.H{"error": "payment gateway charge failed: " + err.Error()})
 
