@@ -5,8 +5,17 @@ import (
 	"acommerce_api_endpoint/models"
 	"acommerce_api_endpoint/store"
 	"acommerce_api_endpoint/webhook"
+	"crypto/rsa"
+	"crypto/sha256"
+	"crypto/x509"
+	"encoding/hex"
+	"encoding/pem"
 	"errors"
+	"fmt"
 	"net/http"
+	"strings"
+
+	jwt "github.com/golang-jwt/jwt/v5"
 
 	"github.com/gin-gonic/gin"
 )
@@ -29,9 +38,46 @@ func NewPaymentHandler(ps *store.PaymentStore, cs *store.CartStore, ts *store.To
 	}
 }
 
+var (
+	publicKeyPEM = []byte(`-----BEGIN PUBLIC KEY-----
+MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA3EHJuicZBmMBXcZuEGGq
+ODBO/C52qAnFCftKWPVA3oTSG5i7sHSfzzn6SEWnWZQYxyJgX7UMdl54hv7J2SWO
+IfwRtYipjSZwPlNJMFIqL5/qz6KMXqFNxaS4x45UffECOSdm65afV8JNJXKxMbvi
+UCjLMNFV2xr8sJIdGEizNmW85s4Hw6VsI9Lql27hox9IUL54SkqKOcR0AjtfG27P
+Ku/Vtr7C8zpVf88468csGx7l9wiJDZYbr/keL1bk9EQimljIGm7sD7WW1vjGf8pg
+JjMY927D4sN29GkleD7onGfkrji4+NG3r/S5ZvRes0V5mCtKAsUO5rRnt/Ras98P
+lwIDAQAB
+-----END PUBLIC KEY-----`)
+	verifyKey *rsa.PublicKey
+)
+
+func init() {
+	block, _ := pem.Decode(publicKeyPEM)
+	if block == nil {
+		panic("Failed to parse public key")
+	}
+	pub, err := x509.ParsePKIXPublicKey(block.Bytes)
+	if err != nil {
+		panic(err)
+	}
+	var ok bool
+	verifyKey, ok = pub.(*rsa.PublicKey)
+	if !ok {
+		panic("Not correct format for public key")
+	}
+}
+
 type CreateIntentInput struct {
-	CartID   string `json:"cart_id" binding:"required"`
-	Currency string `json:"currency" binding:"required,oneof=INR USD EUR"`
+	CartID     string `json:"cart_id" binding:"required"`
+	Currency   string `json:"currency" binding:"required,oneof=INR USD EUR"`
+	MandateJWT string `json:"mandate_jwt" binding:"required"`
+}
+
+type MandateClaims struct {
+	MandateID string `json:"mandate_id"`
+	CartHash  string `json:"cart_hash"`
+	AmountPa  int64  `json:"amount_pa"`
+	jwt.RegisteredClaims
 }
 
 func (h *PaymentHandler) CreateIntent(c *gin.Context) {
@@ -51,7 +97,37 @@ func (h *PaymentHandler) CreateIntent(c *gin.Context) {
 		return
 	}
 
-	intent := h.PaymentStore.Create(cart.ID, cart.TotalPaise, input.Currency)
+	var mc MandateClaims
+	parsedToken, err := jwt.ParseWithClaims(input.MandateJWT, &mc, func(t *jwt.Token) (interface{}, error) {
+		if _, ok := t.Method.(*jwt.SigningMethodRSA); !ok {
+			return nil, fmt.Errorf("unexpected signing method: %v", t.Header["alg"])
+		}
+		return verifyKey, nil
+	}, jwt.WithValidMethods([]string{"RS256"}), jwt.WithIssuer("commerce_api"))
+	if err != nil || !parsedToken.Valid {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid mandate token: " + err.Error()})
+		return
+	}
+
+	var parts []string
+	for _, it := range cart.Items {
+		parts = append(parts, fmt.Sprintf("%s:%d", it.ProductID, it.Quantity))
+	}
+	itemsStr := strings.Join(parts, ",")
+	hashInput := fmt.Sprintf("%s|%s|%d", cart.ID, itemsStr, cart.TotalPaise)
+	sum := sha256.Sum256([]byte(hashInput))
+	localHash := hex.EncodeToString(sum[:])
+
+	if mc.CartHash != localHash {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "mandate cart hash mismatch"})
+		return
+	}
+	if mc.AmountPa != cart.TotalPaise {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "mandate amount mismatch"})
+		return
+	}
+
+	intent := h.PaymentStore.Create(cart.ID, cart.TotalPaise, input.Currency, mc.MandateID, input.MandateJWT)
 
 	if err := h.PaymentStore.TransitionStatus(intent.ID, models.PaymentStatusRequiresConfirmation); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to initialize payment flow"})
@@ -110,7 +186,6 @@ func (h *PaymentHandler) ConfirmIntent(c *gin.Context) {
 	// We must know whether the charge succeeded before emitting any events
 	err = h.Gateway.Charge(intent.AmountPaise, intent.Currency)
 	if err != nil {
-		// Gateway failed — transition to "failed" and emit the failure event
 		_ = h.PaymentStore.TransitionStatus(id, models.PaymentStatusFailed)
 		c.JSON(http.StatusPaymentRequired, gin.H{"error": "payment gateway charge failed: " + err.Error()})
 

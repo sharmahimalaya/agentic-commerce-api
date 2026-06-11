@@ -32,7 +32,7 @@ func NewPaymentStore() *PaymentStore {
 	}
 }
 
-func (s *PaymentStore) Create(cartID string, amount int64, currency string) *models.PaymentIntent {
+func (s *PaymentStore) Create(cartID string, amount int64, currency string, mandateID string, mandateJWT string) *models.PaymentIntent {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -44,6 +44,8 @@ func (s *PaymentStore) Create(cartID string, amount int64, currency string) *mod
 		Status:      models.PaymentStatusCreated,
 		CreatedAt:   time.Now(),
 		UpdatedAt:   time.Now(),
+		MandateID:   mandateID,
+		MandateJWT:  mandateJWT,
 	}
 
 	s.intents[intent.ID] = intent

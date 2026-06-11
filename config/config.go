@@ -4,6 +4,8 @@ import (
 	"os"
 	"strconv"
 	"time"
+
+	"github.com/joho/godotenv"
 )
 
 type Config struct {
@@ -17,6 +19,8 @@ type Config struct {
 }
 
 func Load() *Config {
+	_ = godotenv.Load()
+
 	return &Config{
 		Port:                 getEnv("PORT", "8080"),
 		ShutdownTimeout:      getDurationEnv("SHUTDOWN_TIMEOUT", 5*time.Second),

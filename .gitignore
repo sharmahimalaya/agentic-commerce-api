@@ -13,16 +13,28 @@ acommerce_api_endpoint
 *.out
 coverage.html
 
-# Environment
-.env
-.env.local
-
-# IDE
+# IDEs and OS files
 .vscode/
 .idea/
 *.swp
 *.swo
-
-# OS
 .DS_Store
 Thumbs.db
+
+# Environment and Secrets
+.env
+.env.local
+.env.development
+.env.production
+**/agent.env
+commerce_agent/.env
+
+# Python artifacts and caches
+__pycache__/
+**/__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+**/ .venv/
+commerce_agent/.venv/
+commerce_agent/.cache/

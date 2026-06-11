@@ -10,7 +10,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"log"
 	"math/rand"
 	"net/http"
 	"sync"
@@ -40,7 +39,6 @@ func NewDispatcher(es *store.EventStore) *Dispatcher {
 }
 
 func (d *Dispatcher) Start() {
-	log.Println("[WEBHOOK] Starting dispatcher worker loop...")
 	d.wg.Add(1)
 	go func() {
 		defer d.wg.Done()
@@ -63,16 +61,13 @@ func (d *Dispatcher) Dispatch(event *models.WebhookEvent) {
 	select {
 	case d.eventChan <- event:
 	default:
-		log.Printf("[WEBHOOK] Event channel full, dropping event: %s", event.ID)
 	}
 }
 
 func (d *Dispatcher) Stop() {
-	log.Println("[WEBHOOK] Stopping dispatcher, flushing events...")
 	d.cancel()
 	close(d.eventChan)
 	d.wg.Wait()
-	log.Println("[WEBHOOK] Dispatcher stopped gracefully.")
 }
 
 func (d *Dispatcher) fanOut(event *models.WebhookEvent) {
@@ -98,7 +93,6 @@ func (d *Dispatcher) fanOut(event *models.WebhookEvent) {
 func (d *Dispatcher) deliverWithRetry(sub *models.WebhookSubscription, event *models.WebhookEvent) {
 	payload, err := json.Marshal(event)
 	if err != nil {
-		log.Printf("[WEBHOOK] Failed to marshal event %s: %v", event.ID, err)
 		return
 	}
 	maxRetries := 3
@@ -108,7 +102,6 @@ func (d *Dispatcher) deliverWithRetry(sub *models.WebhookSubscription, event *mo
 		if attempt > 0 {
 			jitter := time.Duration(rand.Intn(500)) * time.Millisecond
 			sleepDuration := backoff + jitter
-			log.Printf("[WEBHOOK] Retrying delivery for event %s to %s in %v (Attempt %d/%d)", event.ID, sub.URL, sleepDuration, attempt, maxRetries)
 			select {
 			case <-time.After(sleepDuration):
 			case <-d.ctx.Done():
@@ -118,7 +111,6 @@ func (d *Dispatcher) deliverWithRetry(sub *models.WebhookSubscription, event *mo
 		}
 		req, err := http.NewRequestWithContext(d.ctx, "POST", sub.URL, bytes.NewReader(payload))
 		if err != nil {
-			log.Printf("[WEBHOOK] Failed to create request for event %s: %v", event.ID, err)
 			return
 		}
 		req.Header.Set("Content-Type", "application/json")
@@ -132,13 +124,8 @@ func (d *Dispatcher) deliverWithRetry(sub *models.WebhookSubscription, event *mo
 		if err == nil {
 			resp.Body.Close()
 			if resp.StatusCode >= 200 && resp.StatusCode < 300 {
-				log.Printf("[WEBHOOK] Successfully delivered event %s to %s (Status: %d)", event.ID, sub.URL, resp.StatusCode)
 				return
 			}
-			log.Printf("[WEBHOOK] Bad response code delivering event %s to %s: %d", event.ID, sub.URL, resp.StatusCode)
-		} else {
-			log.Printf("[WEBHOOK] Delivery failed for event %s to %s: %v", event.ID, sub.URL, err)
 		}
 	}
-	log.Printf("[WEBHOOK] Max retries reached. Delivery failed for event %s to %s", event.ID, sub.URL)
 }

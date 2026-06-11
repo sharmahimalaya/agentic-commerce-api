@@ -1,75 +1,91 @@
-# Agentic Commerce API
+# Agentic Commerce API & Shopping Agent
 
-A Stripe-inspired, high-performance e-commerce REST API built in Go. This project demonstrates production-ready architectural patterns, including scoped access tokens, a strict payment state machine, idempotent request processing, and an asynchronous event-driven webhook delivery system.
+A Stripe-inspired, high-performance e-commerce REST API built in Go, paired with a Python-based AI Shopping Agent powered by Gemini. This project is designed to demonstrate clean architectural separation, middleware chaining, and secure agentic checkout patterns.
 
 ---
 
 ## 🏗️ System Architecture
 
-The project is structured around a clean architecture separating the routing layer, middleware filters, handlers, and memory-backed datastores:
+The project is structured around clean architectural boundaries. It isolates routing, middleware pipelines, business logic handlers, and data repositories.
 
-```
-                      ┌───────────────────────┐
-                      │      HTTP Client      │
-                      └──────────┬────────────┘
-                                 │ HTTP Request (e.g. POST /v1/carts)
-                                 ▼
-                     ┌─────────────────────────┐
-                     │    Gin Router (v1)      │
-                     └──────────┬──────────────┘
-                                 │
-     ┌──────────────────────────┼──────────────────────────┐
-     │ Middleware Pipeline      ▼                          │
-     │  ├─ RequestID (Trace ID generation)                 │
-     │  ├─ Idempotency (Strict double-submit prevention)  │
-     │  └─ RequireScope (Scoped access tokens validation)  │
-     └──────────────────────────┬──────────────────────────┘
-                                 │
-                                 ▼
-                      ┌───────────────────────┐
-                      │    Handler Layer      │
-                      │  (JSON Binding & Val) │
-                      └────┬──────────────┬───┘
-                           │              │
-        Updates Store State│              │Dispatches Async Webhook Event
-                           ▼              ▼
-                    ┌────────────┐  ┌──────────────┐
-                    │ Data Store │  │  Dispatcher  │
-                    │  (Memory)  │  └──────┬───────┘
-                    └────────────┘         │ Runs background workers
-                                           ▼
-                                    ┌──────────────┐
-                                    │  Subscribers │
-                                    │ (Webhook URLs│
-                                    └──────────────┘
+```mermaid
+graph TD
+    Client[HTTP Client / Python Agent] -->|HTTP Request| Router[Gin Router /v1]
+    
+    subgraph Middleware Pipeline
+        Router --> ReqID[Request ID Middleware]
+        ReqID --> Idem[Idempotency Middleware]
+        Idem --> Auth[RequireScope Middleware]
+    end
+    
+    Auth --> Handlers[HTTP Handlers]
+    
+    subgraph Application Core
+        Handlers -->|State Operations| Store[(In-Memory Store)]
+        Handlers -->|Async Dispatch| Dispatcher[Webhook Dispatcher]
+    end
+    
+    Dispatcher -->|Parallel Workers with Backoff| Subscribers[Webhook Subscribers]
 ```
 
 ---
 
-## 🚀 Key Design Decisions
+## 🛠️ Key Design Decisions & Core Patterns
 
-### 1. **Payment State Machine**
-Payments follow a strict, deterministic state-transition graph to prevent duplicate checkouts or unauthorized order completions:
-```
-[created] ──► [requires_confirmation] ──► [succeeded] OR [failed]
+### 1. Deterministic Payment State Machine
+To prevent duplicate checkouts or invalid transactions, payments follow a strict state-transition graph:
+
+```mermaid
+stateDiagram-v2
+    [*] --> created
+    created --> requires_confirmation
+    requires_confirmation --> succeeded
+    requires_confirmation --> failed
+    succeeded --> [*]
+    failed --> [*]
 ```
 *   **Terminal States:** Once a payment intent transitions to `succeeded` or `failed`, no further transitions are allowed.
-*   **Type-Safe Transitions:** State changes return explicit transition errors instead of bare string mismatches, ensuring precise HTTP responses.
+*   **Type-Safe Transitions:** State changes return explicit transition errors instead of generic strings, allowing handlers to respond with precise HTTP codes.
 
-### 2. **Concurrency-Safe Carts (Copy-on-Read / Write)**
-To avoid data races in concurrent environments, the `CartStore` implements deep copying during retrievals (`Get`) and modifications (`Save`). This decouples database memory from handler goroutines, guaranteeing thread safety without blocking the server.
+### 2. Concurrency-Safe Store (Copy-on-Read / Copy-on-Write)
+To avoid data races in multi-threaded Go environments, the `CartStore` implements deep copying during retrievals (`Get`) and mutations (`Save`). This decouples backend memory from handler goroutines without requiring blocking database locks during processing.
 
-### 3. **Idempotency with TTL Eviction**
-`POST` endpoints accept an `Idempotency-Key` header. Requests are intercepted, processed, and their responses cached. Duplicate requests return the cached response immediately, bypassing handler execution. A background worker periodically runs to evict expired cache entries using a configurable Time-To-Live (TTL).
+### 3. Idempotency Middleware with TTL Eviction
+`POST` endpoints accept an `Idempotency-Key` header. Incoming duplicate requests are intercepted early in the middleware pipeline and served the cached response immediately. A background worker periodically evicts expired entries using a configurable Time-To-Live (TTL).
 
-### 4. **Asynchronous Webhook Engine**
-Webhook events are recorded in an event log and dispatched to active subscribers asynchronously. Dispatch workers process events in parallel, complete with an exponential backoff retry mechanism (max 3 retries) to handle transient client timeouts.
+### 4. Asynchronous Webhook Engine
+Webhook events are recorded in an event log and dispatched to subscribers asynchronously. Dispatch workers process events in parallel, complete with an exponential backoff retry mechanism (max 3 retries) to handle transient client timeouts.
+
+### 5. Secure Mandate Verification (JWT / RS256)
+To authorize checkout intents securely:
+*   The Python AI Client generates a transaction hash of the cart contents and signs it with an RSA private key using the **RS256** algorithm.
+*   The Go backend verifies the JWT signature using the corresponding public key and compares the cryptographic hash against the database cart details to prevent tampering or replay attacks.
+
+---
+
+## ⚠️ Architectural Gaps & Production Trade-offs
+
+This project is a demonstration of architectural patterns and **is not production-ready in its current state**. Below are the key trade-offs made and how they should be addressed for a production deployment:
+
+| Category | Current Implementation (Demo) | Production Requirement |
+| :--- | :--- | :--- |
+| **Data Persistence** | Volatile in-memory maps (`sync.Map` and custom structs). | Distributed database (e.g., PostgreSQL, DynamoDB) with transaction logs. |
+| **Concurrency Control** | Simple copy-on-read/write. No conflict resolution. | Optimistic Concurrency Control (OCC) using version checking to prevent lost updates. |
+| **Key Management** | Hardcoded RSA private/public keys in source code. | Secret storage (AWS Secrets Manager, HashiCorp Vault) or a JWKS endpoint. |
+| **Authentication** | Shared static Bearer tokens loaded in memory. | OIDC provider or OAuth2 server with dynamic token issuing and rotation. |
+| **Idempotency Store** | In-memory map. Cache lost on application restart. | Distributed cache (e.g., Redis) with automatic TTL eviction. |
+| **Webhook Delivery** | Simple Go channel workers. | Durable queue system (e.g., RabbitMQ, AWS SQS) to guarantee delivery. |
 
 ---
 
 ## 📂 Project Structure
 
 ```
+├── commerce_agent/      # Python-based Gemini AI agent chatbot
+│   ├── agent.py         # ReAct loop & LLM chat orchestration
+│   ├── client.py        # HTTP client wrapping Go API endpoints
+│   ├── jwt_helper.py    # RS256 signing of purchase mandates
+│   └── main.py          # Interactive/one-shot CLI entrypoint
 ├── config/              # Configuration loader (env vars with defaults)
 ├── gateway/             # External payment gateway interface & mocks
 ├── handlers/            # HTTP Handlers (validation and store orchestration)
@@ -86,32 +102,63 @@ Webhook events are recorded in an event log and dispatched to active subscribers
 
 ---
 
-## 🛠️ Getting Started
+## 🚀 Getting Started
 
-### Prerequisites
-*   Go (version 1.22 or later)
-*   GNU Make (optional, for automation commands)
+### 1. Prerequisites
+*   **Go**: version 1.22 or later
+*   **Python**: version 3.10 or later
+*   **Make**: optional, for automation commands
 
-### Configuration
-1. Copy the environment template:
+### 2. Configure & Run the Go Backend
+1. Copy the template environment file:
    ```bash
    cp .env.example .env
    ```
-2. Modify variables inside `.env` to configure ports, timeouts, and security credentials:
-   *   `PORT`: Port to run the server on (default: `8080`).
-   *   `ADMIN_API_KEY`: Key used to authenticate token creation calls (`X-Admin-Key` header).
-   *   `IDEMPOTENCY_TTL`: Lifetime of idempotency cache entries (default: `24h`).
+2. Start the server (runs on port `8080` by default):
+   ```bash
+   go run main.go
+   # Or using make:
+   make run
+   ```
 
-### Running the Application
-Using the configured Makefile:
-*   **Run development server:** `make run`
-*   **Build production binary:** `make build`
-*   **Run linter check:** `make lint`
-*   **Clean build files:** `make clean`
+### 3. Configure & Run the Python Agent
+1. Navigate to the agent directory and create a virtual environment:
+   ```bash
+   cd commerce_agent
+   python -m venv .venv
+   ```
+2. Activate the virtual environment:
+   *   **Windows**: `.venv\Scripts\activate`
+   *   **macOS/Linux**: `source .venv/bin/activate`
+3. Install dependencies:
+   ```bash
+   pip install -r requirements.txt
+   ```
+4. Copy the environment file and add your `GEMINI_API_KEY`:
+   ```bash
+   cp .env.example .env
+   ```
+5. Run the agent in **Interactive Chat Mode**:
+   ```bash
+   python -m commerce_agent.main
+   ```
+6. Alternatively, run in **One-Shot Mode**:
+   ```bash
+   python -m commerce_agent.main "Buy the cheapest biscuit in INR"
+   ```
 
 ---
 
-## 🔌 API Reference
+## 🧪 Testing
+
+To run the unit tests and verify core backend functionality:
+```bash
+go test -v ./...
+```
+
+---
+
+## 📋 API Reference
 
 ### 1. Authentication
 Endpoints (except for token creation) require a Bearer token in the `Authorization` header:
@@ -142,16 +189,7 @@ Authorization: Bearer <your-access-secret>
 
 #### **Step 2: Create a Cart**
 *   **Request:** `POST /v1/carts`
-*   **Response:** `201 Created` with a new cart object:
-    ```json
-    {
-      "id": "cart_uuid_goes_here",
-      "items": [],
-      "total_paise": 0,
-      "created_at": "...",
-      "updated_at": "..."
-    }
-    ```
+*   **Response:** `201 Created` with a new cart object.
 
 #### **Step 3: Add Items to Cart**
 *   **Request:** `POST /v1/carts/<cart_id>/items`
@@ -162,18 +200,17 @@ Authorization: Bearer <your-access-secret>
       "quantity": 2
     }
     ```
-*   **Response:** `200 OK` showing the updated cart state and recalculated price total.
 
-#### **Step 4: Create a Payment Intent**
+#### **Step 4: Create a Payment Intent (With JWT Mandate)**
 *   **Request:** `POST /v1/payment-intents`
 *   **Payload:**
     ```json
     {
       "cart_id": "cart_uuid_goes_here",
-      "currency": "INR"
+      "currency": "INR",
+      "mandate_jwt": "<signed-rs256-token>"
     }
     ```
-*   **Response:** `201 Created` with a payment intent in the `requires_confirmation` status.
 
 #### **Step 5: Confirm Payment**
 *   **Request:** `POST /v1/payment-intents/<intent_id>/confirm`

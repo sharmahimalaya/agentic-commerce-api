@@ -62,4 +62,6 @@ type PaymentIntent struct {
 	Status      PaymentStatus `json:"status"`
 	CreatedAt   time.Time     `json:"created_at"`
 	UpdatedAt   time.Time     `json:"updated_at"`
+	MandateID   string        `json:"mandate_id,omitempty"`
+	MandateJWT  string        `json:"mandate_jwt,omitempty"`
 }
