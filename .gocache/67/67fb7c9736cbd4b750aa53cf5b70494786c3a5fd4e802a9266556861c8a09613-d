@@ -1,5 +1,0 @@
-./cart_store.go
-./event_store.go
-./payment_store.go
-./product_store.go
-./token_store.go

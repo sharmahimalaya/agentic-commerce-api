@@ -1,5 +1,0 @@
-./cart_handler.go
-./payment_handler.go
-./product_handler.go
-./token_handler.go
-./webhook_handler.go
