@@ -1,6 +1,6 @@
 # Agentic Commerce API & Shopping Agent
 
-A Stripe-inspired, high-performance e-commerce REST API built in Go, paired with a Python-based AI Shopping Agent powered by Gemini. This project is designed to demonstrate clean architectural separation, middleware chaining, and secure agentic checkout patterns.
+An API-first commerce and payments backend purpose-built for autonomous AI agents. The Go service exposes a Stripe-style REST API with idempotent request handling, HMAC-signed webhook delivery, read-your-writes cart consistency, and scoped bearer-token auth — while a companion Python agent (Gemini-powered) drives the entire purchase flow end-to-end without human intervention.
 
 ---
 
@@ -10,23 +10,22 @@ The project is structured around clean architectural boundaries. It isolates rou
 
 ```mermaid
 graph TD
-    Client[HTTP Client / Python Agent] -->|HTTP Request| Router[Gin Router /v1]
-    
-    subgraph Middleware Pipeline
-        Router --> ReqID[Request ID Middleware]
-        ReqID --> Idem[Idempotency Middleware]
-        Idem --> Auth[RequireScope Middleware]
+    Client["HTTP Client / Python Agent"] -->|HTTP Request| Router["Gin Router /v1"]
+
+    subgraph MiddlewarePipeline ["Middleware Pipeline"]
+        Router --> ReqID["Request ID Middleware"]
+        ReqID --> Idem["Idempotency Middleware"]
+        Idem --> Auth["RequireScope Middleware"]
     end
-    
-    Auth --> Handlers[HTTP Handlers]
-    
-    subgraph Application Core
-        Handlers -->|State Operations| Store[Interface-Driven Stores]
-        Store -->|In-Memory Map| MemoryMap[(Concurrently-Safe Store)]
-        Handlers -->|Async Dispatch| Dispatcher[Webhook Dispatcher]
+
+    Auth --> Handlers["HTTP Handlers"]
+
+    subgraph ApplicationCore ["Application Core"]
+        Handlers -->|State Operations| Store["Interface-Driven Stores"]
+        Store -->|In-Memory Map| MemoryMap[("Concurrently-Safe Store")]
+        Handlers -->|Async Dispatch| Dispatcher["Webhook Dispatcher"]
+        Dispatcher -->|"Parallel Workers w/ Backoff"| Subscribers["Webhook Subscribers"]
     end
-    
-    Dispatcher -->|Parallel Workers with Backoff| Subscribers[Webhook Subscribers]
 ```
 
 ---
