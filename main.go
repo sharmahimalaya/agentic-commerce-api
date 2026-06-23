@@ -9,7 +9,7 @@ import (
 	"acommerce_api_endpoint/store"
 	"acommerce_api_endpoint/webhook"
 	"context"
-	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
@@ -19,6 +19,8 @@ import (
 )
 
 func main() {
+	// Initialize structured logging
+	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, nil)))
 
 	cfg := config.Load()
 	productStore := store.NewProductStore()
@@ -39,7 +41,7 @@ func main() {
 
 	productHandler := handlers.NewProductHandler(productStore)
 	cartHandler := handlers.NewCartHandler(cartStore, productStore, dispatcher)
-	paymentHandler := handlers.NewPaymentHandler(paymentStore, cartStore, tokenStore, mockGateway, dispatcher)
+	paymentHandler := handlers.NewPaymentHandler(paymentStore, cartStore, tokenStore, mockGateway, dispatcher, cfg.MandatePublicKeyPEM)
 	tokenHandler := handlers.NewTokenHandler(tokenStore)
 	webhookHandler := handlers.NewWebhookHandler(eventStore)
 
@@ -75,22 +77,24 @@ func main() {
 	}
 
 	go func() {
-		log.Println("Starting API on port " + cfg.Port + "...")
+		slog.Info("Starting API", slog.String("port", cfg.Port))
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Fatalf("Failed to start server: %v", err)
+			slog.Error("Failed to start server", slog.Any("error", err))
+			os.Exit(1)
 		}
 	}()
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit
-	log.Println("Shutting down server...")
+	slog.Info("Shutting down server...")
 
 	ctx, cancel := context.WithTimeout(context.Background(), cfg.ShutdownTimeout)
 	defer cancel()
 
 	if err := srv.Shutdown(ctx); err != nil {
-		log.Fatal("Server forced to shutdown: ", err)
+		slog.Error("Server forced to shutdown", slog.Any("error", err))
+		os.Exit(1)
 	}
 	dispatcher.Stop()
-	log.Println("Server exiting")
+	slog.Info("Server exiting")
 }

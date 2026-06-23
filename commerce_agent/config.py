@@ -21,4 +21,8 @@ class AgentConfig(BaseSettings) :
     default_spend_limit_paise: int = 100000
     default_token_expiry_hours: int = 1        
 
+    # Mandate Keys for RS256 signing
+    mandate_private_key_pem: Optional[str] = None
+    mandate_public_key_pem: Optional[str] = None
+
 settings = AgentConfig()

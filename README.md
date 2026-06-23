@@ -21,7 +21,8 @@ graph TD
     Auth --> Handlers[HTTP Handlers]
     
     subgraph Application Core
-        Handlers -->|State Operations| Store[(In-Memory Store)]
+        Handlers -->|State Operations| Store[Interface-Driven Stores]
+        Store -->|In-Memory Map| MemoryMap[(Concurrently-Safe Store)]
         Handlers -->|Async Dispatch| Dispatcher[Webhook Dispatcher]
     end
     
@@ -32,7 +33,10 @@ graph TD
 
 ## 🛠️ Key Design Decisions & Core Patterns
 
-### 1. Deterministic Payment State Machine
+### 1. Interface-Driven Extensibility
+Handlers (`CartHandler` and `PaymentHandler`) are decoupled from concrete store implementations by depending on the newly introduced `CartStorer` and `PaymentStorer` interfaces. This allows developers to easily swap out volatile in-memory databases with real relational/NoSQL stores, or drop in mocks for unit and integration testing.
+
+### 2. Deterministic Payment State Machine
 To prevent duplicate checkouts or invalid transactions, payments follow a strict state-transition graph:
 
 ```mermaid
@@ -47,19 +51,23 @@ stateDiagram-v2
 *   **Terminal States:** Once a payment intent transitions to `succeeded` or `failed`, no further transitions are allowed.
 *   **Type-Safe Transitions:** State changes return explicit transition errors instead of generic strings, allowing handlers to respond with precise HTTP codes.
 
-### 2. Concurrency-Safe Store (Copy-on-Read / Copy-on-Write)
-To avoid data races in multi-threaded Go environments, the `CartStore` implements deep copying during retrievals (`Get`) and mutations (`Save`). This decouples backend memory from handler goroutines without requiring blocking database locks during processing.
+### 3. Concurrency-Safe Memory Store (Deep Copy-on-Read / Copy-on-Write)
+To avoid data race conditions in a multi-threaded Go application serving concurrent HTTP requests, the store layer implements deep copying during retrievals (`Get`) and mutations (`Save`). Handlers never obtain pointers to memory maps directly, preventing write-conflicts and panic errors.
 
-### 3. Idempotency Middleware with TTL Eviction
-`POST` endpoints accept an `Idempotency-Key` header. Incoming duplicate requests are intercepted early in the middleware pipeline and served the cached response immediately. A background worker periodically evicts expired entries using a configurable Time-To-Live (TTL).
+### 4. Structured JSON Logging (`slog`)
+The system leverages Go's standard structured logging framework `log/slog`. Events (server startup/shutdown, HTTP requests, mock gateway transactions, and webhook retry attempts) are printed in standardized JSON format, facilitating parsing by log collectors like Datadog, Splunk, or Elasticsearch in cloud environments.
 
-### 4. Asynchronous Webhook Engine
-Webhook events are recorded in an event log and dispatched to subscribers asynchronously. Dispatch workers process events in parallel, complete with an exponential backoff retry mechanism (max 3 retries) to handle transient client timeouts.
-
-### 5. Secure Mandate Verification (JWT / RS256)
+### 5. Dynamic Mandate Verification (JWT / RS256)
 To authorize checkout intents securely:
 *   The Python AI Client generates a transaction hash of the cart contents and signs it with an RSA private key using the **RS256** algorithm.
 *   The Go backend verifies the JWT signature using the corresponding public key and compares the cryptographic hash against the database cart details to prevent tampering or replay attacks.
+*   The verification key is configured dynamically using the `MANDATE_PUBLIC_KEY_PEM` environment variable (supporting escaped newlines), preventing hardcoded secrets in codebase source files.
+
+### 6. Idempotency Middleware with TTL Eviction
+`POST` endpoints accept an `Idempotency-Key` header. Incoming duplicate requests are intercepted early in the middleware pipeline and served the cached response immediately. A background worker periodically evicts expired entries using a configurable Time-To-Live (TTL).
+
+### 7. Asynchronous Webhook Engine
+Webhook events are recorded in an event log and dispatched to subscribers asynchronously. Dispatch workers process events in parallel, complete with an exponential backoff retry mechanism (max 3 retries) and random jitter to handle transient client timeouts.
 
 ---
 
@@ -69,9 +77,9 @@ This project is a demonstration of architectural patterns and **is not productio
 
 | Category | Current Implementation (Demo) | Production Requirement |
 | :--- | :--- | :--- |
-| **Data Persistence** | Volatile in-memory maps (`sync.Map` and custom structs). | Distributed database (e.g., PostgreSQL, DynamoDB) with transaction logs. |
+| **Data Persistence** | Volatile in-memory maps behind Go interfaces (`CartStorer`, `PaymentStorer`). | Distributed database (e.g., PostgreSQL, DynamoDB) with transaction logs. |
 | **Concurrency Control** | Simple copy-on-read/write. No conflict resolution. | Optimistic Concurrency Control (OCC) using version checking to prevent lost updates. |
-| **Key Management** | Hardcoded RSA private/public keys in source code. | Secret storage (AWS Secrets Manager, HashiCorp Vault) or a JWKS endpoint. |
+| **Key Management** | Dynamically loaded via environment configuration. | Secret storage (AWS Secrets Manager, HashiCorp Vault) or a JWKS endpoint. |
 | **Authentication** | Shared static Bearer tokens loaded in memory. | OIDC provider or OAuth2 server with dynamic token issuing and rotation. |
 | **Idempotency Store** | In-memory map. Cache lost on application restart. | Distributed cache (e.g., Redis) with automatic TTL eviction. |
 | **Webhook Delivery** | Simple Go channel workers. | Durable queue system (e.g., RabbitMQ, AWS SQS) to guarantee delivery. |
@@ -92,6 +100,12 @@ This project is a demonstration of architectural patterns and **is not productio
 ├── middleware/          # Gin Middlewares (Auth, RequestID, Idempotency, Admin Key)
 ├── models/              # Go structs representing database entities
 ├── store/               # In-memory repositories & state machine
+├── tests/               # Automated unit & integration tests
+│   ├── auth_flow_test.go
+│   ├── cart_flow_test.go
+│   ├── idempotency_test.go
+│   ├── payment_flow_test.go
+│   └── test_helpers.go
 ├── webhook/             # Webhook event dispatcher & backoff retry logic
 ├── .env.example         # Environment template file
 ├── .golangci.yml        # Linter configuration
@@ -151,7 +165,8 @@ This project is a demonstration of architectural patterns and **is not productio
 
 ## 🧪 Testing
 
-To run the unit tests and verify core backend functionality:
+To run the full suite of automated unit and integration tests covering the entire application (handlers, middleware, state transitions, authentication, and idempotency):
+
 ```bash
 go test -v ./...
 ```

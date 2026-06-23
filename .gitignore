@@ -38,3 +38,12 @@ __pycache__/
 **/ .venv/
 commerce_agent/.venv/
 commerce_agent/.cache/
+explanation.md
+
+# Go build cache
+.gocache/
+
+# Python test caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/

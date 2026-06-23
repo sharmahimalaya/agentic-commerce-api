@@ -20,59 +20,55 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+// PaymentHandler deals with the critical checkout process.
+// It verifies RS256 JWT purchase mandates signed by the client,
+// validates that the cart hasn't been tampered with, checks token spending limits,
+// charges the payment gateway, and transitions payment intent states.
 type PaymentHandler struct {
-	PaymentStore *store.PaymentStore
-	CartStore    *store.CartStore
+	PaymentStore store.PaymentStorer
+	CartStore    store.CartStorer
 	TokenStore   *store.TokenStore
 	Gateway      gateway.Gateway
 	Dispatcher   *webhook.Dispatcher
+	verifyKey    *rsa.PublicKey // Cached RSA public key decoded during startup
 }
 
-func NewPaymentHandler(ps *store.PaymentStore, cs *store.CartStore, ts *store.TokenStore, pg gateway.Gateway, d *webhook.Dispatcher) *PaymentHandler {
+// NewPaymentHandler initializes the handler and parses the public key PEM.
+// It panics if the key is invalid, because we absolutely need this to verify signatures!
+func NewPaymentHandler(ps store.PaymentStorer, cs store.CartStorer, ts *store.TokenStore, pg gateway.Gateway, d *webhook.Dispatcher, publicKeyPEM string) *PaymentHandler {
+	block, _ := pem.Decode([]byte(publicKeyPEM))
+	if block == nil {
+		panic("Failed to parse public key PEM")
+	}
+	pub, err := x509.ParsePKIXPublicKey(block.Bytes)
+	if err != nil {
+		panic("Failed to parse public key: " + err.Error())
+	}
+	vKey, ok := pub.(*rsa.PublicKey)
+	if !ok {
+		panic("Public key is not of type RSA public key")
+	}
+
 	return &PaymentHandler{
 		PaymentStore: ps,
 		CartStore:    cs,
 		TokenStore:   ts,
 		Gateway:      pg,
 		Dispatcher:   d,
+		verifyKey:    vKey,
 	}
 }
 
-var (
-	publicKeyPEM = []byte(`-----BEGIN PUBLIC KEY-----
-MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA3EHJuicZBmMBXcZuEGGq
-ODBO/C52qAnFCftKWPVA3oTSG5i7sHSfzzn6SEWnWZQYxyJgX7UMdl54hv7J2SWO
-IfwRtYipjSZwPlNJMFIqL5/qz6KMXqFNxaS4x45UffECOSdm65afV8JNJXKxMbvi
-UCjLMNFV2xr8sJIdGEizNmW85s4Hw6VsI9Lql27hox9IUL54SkqKOcR0AjtfG27P
-Ku/Vtr7C8zpVf88468csGx7l9wiJDZYbr/keL1bk9EQimljIGm7sD7WW1vjGf8pg
-JjMY927D4sN29GkleD7onGfkrji4+NG3r/S5ZvRes0V5mCtKAsUO5rRnt/Ras98P
-lwIDAQAB
------END PUBLIC KEY-----`)
-	verifyKey *rsa.PublicKey
-)
-
-func init() {
-	block, _ := pem.Decode(publicKeyPEM)
-	if block == nil {
-		panic("Failed to parse public key")
-	}
-	pub, err := x509.ParsePKIXPublicKey(block.Bytes)
-	if err != nil {
-		panic(err)
-	}
-	var ok bool
-	verifyKey, ok = pub.(*rsa.PublicKey)
-	if !ok {
-		panic("Not correct format for public key")
-	}
-}
-
+// CreateIntentInput is what the client sends us to start checking out.
+// They must provide the cart ID, the currency they're using, and the JWT mandate.
 type CreateIntentInput struct {
 	CartID     string `json:"cart_id" binding:"required"`
 	Currency   string `json:"currency" binding:"required,oneof=INR USD EUR"`
 	MandateJWT string `json:"mandate_jwt" binding:"required"`
 }
 
+// MandateClaims matches the structure of the signed JWT claims from the client.
+// It includes a hash of the cart contents and the authorized checkout amount.
 type MandateClaims struct {
 	MandateID string `json:"mandate_id"`
 	CartHash  string `json:"cart_hash"`
@@ -80,6 +76,10 @@ type MandateClaims struct {
 	jwt.RegisteredClaims
 }
 
+// CreateIntent handles POST /v1/payment-intents.
+// It reads the cart, verifies the JWT signature (RS256) and claims,
+// checks that the cart contents/total match what was signed (to prevent price tampering),
+// creates a payment intent in the store, and transitions it to 'requires_confirmation'.
 func (h *PaymentHandler) CreateIntent(c *gin.Context) {
 	var input CreateIntentInput
 	if err := c.ShouldBindJSON(&input); err != nil {
@@ -87,6 +87,7 @@ func (h *PaymentHandler) CreateIntent(c *gin.Context) {
 		return
 	}
 
+	// Fetch the cart from memory
 	cart, err := h.CartStore.Get(input.CartID)
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "cart not found"})
@@ -97,27 +98,33 @@ func (h *PaymentHandler) CreateIntent(c *gin.Context) {
 		return
 	}
 
+	// Verify JWT signature using our public key
 	var mc MandateClaims
 	parsedToken, err := jwt.ParseWithClaims(input.MandateJWT, &mc, func(t *jwt.Token) (interface{}, error) {
+		// Make sure they are using RSA (RS256) to sign this and not some weak fallback
 		if _, ok := t.Method.(*jwt.SigningMethodRSA); !ok {
 			return nil, fmt.Errorf("unexpected signing method: %v", t.Header["alg"])
 		}
-		return verifyKey, nil
+		return h.verifyKey, nil
 	}, jwt.WithValidMethods([]string{"RS256"}), jwt.WithIssuer("commerce_api"))
 	if err != nil || !parsedToken.Valid {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid mandate token: " + err.Error()})
 		return
 	}
 
+	// Recreate the cart hash locally and compare it with what the client signed.
+	// This makes sure the client didn't secretly change product quantities/prices after signing!
 	var parts []string
 	for _, it := range cart.Items {
 		parts = append(parts, fmt.Sprintf("%s:%d", it.ProductID, it.Quantity))
 	}
 	itemsStr := strings.Join(parts, ",")
+	// Format is: cartID|productId:quantity,productId:quantity|totalPaise
 	hashInput := fmt.Sprintf("%s|%s|%d", cart.ID, itemsStr, cart.TotalPaise)
 	sum := sha256.Sum256([]byte(hashInput))
 	localHash := hex.EncodeToString(sum[:])
 
+	// Strict checks to avoid fraud
 	if mc.CartHash != localHash {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "mandate cart hash mismatch"})
 		return
@@ -127,25 +134,29 @@ func (h *PaymentHandler) CreateIntent(c *gin.Context) {
 		return
 	}
 
+	// Save the payment intent in Created status
 	intent := h.PaymentStore.Create(cart.ID, cart.TotalPaise, input.Currency, mc.MandateID, input.MandateJWT)
 
+	// Transition status to RequiresConfirmation so it's ready to be confirmed (charged)
 	if err := h.PaymentStore.TransitionStatus(intent.ID, models.PaymentStatusRequiresConfirmation); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to initialize payment flow"})
 		return
 	}
-	var erro error
-	intent, erro = h.PaymentStore.Get(intent.ID)
-	if erro != nil {
+	var er error
+	intent, er = h.PaymentStore.Get(intent.ID)
+	if er != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal error"})
 		return
 	}
 	c.JSON(http.StatusCreated, intent)
 
+	// Fire an event to notify subscribers (e.g. shipping, metrics)
 	evt := h.Dispatcher.EventStore.RecordEvent("payment_intent.created", intent)
 	h.Dispatcher.Dispatch(evt)
-
 }
 
+// GetIntent handles GET /v1/payment-intents/:id.
+// Retrieves a payment intent by its unique ID.
 func (h *PaymentHandler) GetIntent(c *gin.Context) {
 	id := c.Param("id")
 	intent, err := h.PaymentStore.Get(id)
@@ -159,6 +170,10 @@ func (h *PaymentHandler) GetIntent(c *gin.Context) {
 	}
 	c.JSON(http.StatusOK, intent)
 }
+
+// ConfirmIntent handles POST /v1/payment-intents/:id/confirm.
+// It verifies the authorization token's spend limit, calls the payment gateway,
+// updates the status to succeeded or failed, and fires webhook events.
 func (h *PaymentHandler) ConfirmIntent(c *gin.Context) {
 	id := c.Param("id")
 
@@ -172,7 +187,7 @@ func (h *PaymentHandler) ConfirmIntent(c *gin.Context) {
 		return
 	}
 
-	// Spend-limit check: ensure the token has enough budget for this charge.
+	// Spend-limit check: make sure the bearer token hasn't exceeded its lifetime budget limit.
 	tokenVal, exists := c.Get("Token")
 	if exists {
 		token := tokenVal.(*models.AuthToken)
@@ -182,10 +197,11 @@ func (h *PaymentHandler) ConfirmIntent(c *gin.Context) {
 		}
 	}
 
-	// Step 1: Charge the gateway FIRST
-	// We must know whether the charge succeeded before emitting any events
+	// Step 1: Charge the gateway FIRST.
+	// We want to be sure the bank transaction cleared before we mark it succeeded.
 	err = h.Gateway.Charge(intent.AmountPaise, intent.Currency)
 	if err != nil {
+		// Gateway rejected the charge. Mark status as failed and emit failure webhook event.
 		_ = h.PaymentStore.TransitionStatus(id, models.PaymentStatusFailed)
 		c.JSON(http.StatusPaymentRequired, gin.H{"error": "payment gateway charge failed: " + err.Error()})
 
@@ -196,7 +212,7 @@ func (h *PaymentHandler) ConfirmIntent(c *gin.Context) {
 		return
 	}
 
-	// Step 2: Charge succeeded — transition status.
+	// Step 2: Charge succeeded — transition state machine to Succeeded status.
 	err = h.PaymentStore.TransitionStatus(id, models.PaymentStatusSucceeded)
 	if err != nil {
 		var transitionErr store.ErrInvalidTransition
@@ -212,7 +228,7 @@ func (h *PaymentHandler) ConfirmIntent(c *gin.Context) {
 		return
 	}
 
-	// Step 3: Fetch updated status and respond with final state.
+	// Step 3: Fetch updated status and respond with final status representation.
 	intent, err = h.PaymentStore.Get(id)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal error"})
@@ -220,7 +236,8 @@ func (h *PaymentHandler) ConfirmIntent(c *gin.Context) {
 	}
 	c.JSON(http.StatusOK, intent)
 
-	// Step 4: Emit the success event AFTER responding.
+	// Step 4: Emit success event asynchronously so warehouse or notification services can pick it up.
 	evt := h.Dispatcher.EventStore.RecordEvent("payment_intent.succeeded", intent)
 	h.Dispatcher.Dispatch(evt)
 }
+
