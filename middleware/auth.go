@@ -37,7 +37,6 @@ func RequireScope(required models.Scope, ts *store.TokenStore) gin.HandlerFunc {
 		}
 
 		c.Set("Token", token)
-		// c.Set("TokenSecret", secret)
 
 		c.Next()
 
