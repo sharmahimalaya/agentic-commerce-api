@@ -9,7 +9,7 @@ import (
 func RequireAdminKey(expectedKey string) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if expectedKey == "" {
-			c.JSON(http.StatusForbidden, gin.H{"errpr": "admin access is not configured"})
+			c.JSON(http.StatusForbidden, gin.H{"error": "admin access is not configured"})
 			c.Abort()
 			return
 		}
